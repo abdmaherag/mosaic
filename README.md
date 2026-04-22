@@ -1,46 +1,82 @@
-# DocRAG — Multi-Document RAG Pipeline
+# Mosaic — Documents RAG System
 
-A full-stack Retrieval-Augmented Generation (RAG) system that lets you upload multiple documents and ask natural language questions answered by synthesizing information across all of them — with source citations and streaming responses.
+Mosaic lets you upload multiple documents and ask questions that are answered by synthesizing information across all of them — with every source cited.
 
-Built as a portfolio project to demonstrate end-to-end RAG architecture with a production-quality frontend.
+<img src="Mosaic%20GIF.gif" alt="Mosaic demo" width="800"/>
 
 ## Features
 
-- **Multi-format ingestion** — PDF, DOCX, HTML, TXT, Markdown, CSV, and code files
-- **Semantic chunking** — Splits documents at topic boundaries using embedding cosine similarity (not arbitrary character counts)
-- **Hybrid retrieval** — BM25 keyword search + vector similarity merged via Reciprocal Rank Fusion for better precision and recall
-- **Multi-query** — Auto-generates 2 query variants per question, retrieves for each, deduplicates results for broader coverage
-- **Cross-document retrieval** — Queries all documents simultaneously, surfaces top-K chunks
-- **Source citations** — Every answer links back to the exact document excerpt it came from
-- **Streaming** — Both document ingestion (step-by-step progress) and query responses stream via SSE
-- **Conversation memory** — Follow-up questions use session chat history
-- **Compare mode** — Select 2+ documents and get a structured per-doc comparison answer
-- **Honest refusal** — When no relevant content is found, says so and shows the closest low-confidence chunks
+- **Multi-format ingestion** — PDF, DOCX, HTML, TXT, Markdown.
+- **Semantic chunking** — Splits at topic boundaries using sentence-embedding cosine similarity, not arbitrary character counts
+- **Hybrid retrieval** — BM25 keyword search + vector similarity merged via Reciprocal Rank Fusion (RRF)
+- **Multi-query expansion** — Auto-generates 2 query variants per question for broader recall
+- **Per-document filtering** — Query all documents or select a subset; Compare mode diffs 2–10 docs side-by-side
+- **Streaming** — Document ingestion (step-by-step progress) and query responses both stream via SSE
+- **Conversation memory** — Follow-up questions use per-session chat history (last 10 turns)
+- **Honest refusal** — Returns "no relevant documents" when retrieval confidence is below threshold
 
 ## Stack
 
 | Layer | Technology |
 |---|---|
-| Backend | FastAPI (Python 3.12+) |
-| Frontend | Next.js 15 (App Router) + Tailwind CSS |
-| Vector DB | ChromaDB (local, persistent) |
-| Embeddings | `sentence-transformers` — `all-MiniLM-L6-v2` (local, no API) |
+| Backend | FastAPI 0.115 · Python 3.12 |
+| Frontend | Next.js 16.1 (App Router) · Tailwind CSS v4 |
+| Vector DB | ChromaDB 0.6 (local, persistent, HNSW cosine) |
+| Embeddings | `sentence-transformers` — `all-MiniLM-L6-v2` · 384-dim · local CPU |
 | LLM | Groq — `llama-3.3-70b-versatile` |
-| Keyword search | BM25 via `rank-bm25` |
-| Document parsing | PyPDF2, python-docx, BeautifulSoup4 |
+| Keyword search | `rank-bm25` — BM25Okapi with per-device cache |
+| Parsing | PyPDF2 · python-docx · BeautifulSoup4 |
 
 ## Architecture
 
 ```
-Upload → Parse → Semantic Chunk → Embed (local) → Store in ChromaDB
+Upload  →  Parse  →  Semantic chunk (100–800 chars, 1-sentence overlap)  →  Embed (local)  →  ChromaDB
 
-Query  → Generate 2 query variants (Groq)
-       → Hybrid retrieve per variant: BM25 + vector similarity (RRF merge)
-       → Deduplicate & merge top-5 chunks
-       → Stream answer (Groq llama-3.3-70b-versatile) with [Source] citations
+Query   →  Expand to 3 variants (Groq)
+        →  Per variant: vector search (ChromaDB) + BM25
+        →  Reciprocal Rank Fusion (k=60) across all results
+        →  Threshold filter (distance < 0.80) → top-5 chunks
+        →  Stream answer via Groq with source citations (SSE)
 ```
 
-Documents are embedded locally with sentence-transformers (no API cost). Queries combine BM25 keyword matching with ChromaDB vector similarity via Reciprocal Rank Fusion, run across multiple query variants for better recall. Groq's fast inference generates the answer with streaming.
+Documents are embedded locally — no API cost at ingestion time. Queries combine BM25 and vector search, run across 3 query phrasings, and fuse results via RRF before the LLM generates a streamed, cited answer.
+
+## Project Structure
+
+```text
+mosaic/
+├── backend/
+│   ├── main.py                 # FastAPI app, CORS, security headers
+│   ├── Dockerfile              # CPU-only PyTorch image, port 7860
+│   ├── requirements.txt
+│   ├── routers/
+│   │   ├── documents.py        # Upload (SSE progress), list, delete
+│   │   └── query.py            # Stream, compare, vector-only, session clear
+│   ├── services/
+│   │   ├── parser.py           # Format-aware dispatch (PDF/DOCX/HTML/text/code)
+│   │   ├── chunker.py          # Semantic chunking via sentence similarity
+│   │   ├── embedder.py         # SentenceTransformer singleton + batch encode
+│   │   ├── retriever.py        # Hybrid BM25 + vector, RRF fusion, multi-query
+│   │   ├── generator.py        # Groq streaming, query variant generation
+│   │   └── pipeline.py         # Orchestrates parse → chunk → embed → store
+│   ├── models/
+│   │   └── schemas.py          # Pydantic request/response models
+│   ├── db/
+│   │   └── chroma_client.py    # ChromaDB CRUD wrapper
+│   └── tests/                  # pytest suite (API, chunker, parser, retriever)
+├── frontend/
+│   ├── app/
+│   │   ├── page.tsx            # Main app — state, sidebar, chat panel
+│   │   ├── layout.tsx          # Root layout, fonts, metadata
+│   │   └── globals.css         # Tailwind theme + custom design tokens
+│   ├── lib/
+│   │   ├── api.ts              # Typed fetch wrappers + SSE stream parsers
+│   │   └── types.ts            # Shared TypeScript interfaces
+│   └── components/             # ChatPanel, DocumentList, UploadZone, Citations, Toast
+└── eval/
+    ├── eval.py                 # Retrieval eval script (hit@k, keyword@k)
+    └── eval_dataset.json       # Q&A pairs for evaluation
+```
 
 ## Getting Started
 
@@ -54,26 +90,36 @@ Documents are embedded locally with sentence-transformers (no API cost). Queries
 
 ```bash
 cd backend
+
 python -m venv venv
 venv\Scripts\activate        # Windows
-# source venv/bin/activate   # macOS/Linux
+# source venv/bin/activate   # macOS / Linux
 
 pip install -r requirements.txt
 
-# Create .env from template
+# Create .env
 cp ../.env.example .env
-# Edit .env and set GROQ_API_KEY
+# Set GROQ_API_KEY in .env
 
 uvicorn main:app --reload --port 8000
 ```
 
-API docs available at `http://localhost:8000/docs`
+API docs: `http://localhost:8000/docs`
 
 ### Frontend
 
 ```bash
 cd frontend
 npm install
+```
+
+Create `frontend/.env.local`:
+
+```
+NEXT_PUBLIC_API_URL=http://localhost:8000
+```
+
+```bash
 npm run dev
 ```
 
@@ -81,104 +127,47 @@ Open `http://localhost:3000`
 
 ## Environment Variables
 
-Copy `.env.example` to `backend/.env`:
-
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `GROQ_API_KEY` | Yes | — | Groq API key for LLM generation and query expansion |
-| `ALLOWED_ORIGINS` | No | `http://localhost:3000` | Comma-separated list of allowed frontend origins |
-| `CHROMA_DATA_PATH` | No | `./chroma_data` | Path for ChromaDB persistent storage |
-
-## Deployment
-
-### Backend — Railway
-
-1. Create a new Railway project and connect this repo, with **root directory** set to `backend/`
-2. Add a **Volume** and mount it at `/data` (keeps ChromaDB data across deploys)
-3. Set environment variables in Railway dashboard:
-   - `GROQ_API_KEY` = your key
-   - `CHROMA_DATA_PATH` = `/data/chroma`
-   - `ALLOWED_ORIGINS` = `https://your-app.vercel.app`
-4. Railway picks up `railway.toml` automatically — deploy.
-
-### Frontend — Vercel
-
-1. Import the repo and set **root directory** to `frontend/`
-2. Add environment variable:
-   - `NEXT_PUBLIC_API_URL` = `https://your-backend.up.railway.app`
-3. Deploy.
+| `GROQ_API_KEY` | Yes | — | Groq API key (generation + query expansion) |
+| `ALLOWED_ORIGINS` | No | `http://localhost:3000,http://localhost:3001` | Comma-separated CORS origins |
+| `CHROMA_DATA_PATH` | No | `./chroma_data` | ChromaDB persistence directory |
+| `ENVIRONMENT` | No | `dev` | Set to `production` to disable Swagger UI |
 
 ## API Endpoints
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/documents/` | List all uploaded documents |
-| `POST` | `/documents/upload` | Upload a document (SSE progress stream) |
-| `DELETE` | `/documents/{id}` | Delete a document and its embeddings |
-| `POST` | `/query/stream` | Query with streaming response (SSE) |
-| `POST` | `/query/compare/stream` | Compare a question across specific docs (SSE) |
-| `DELETE` | `/query/session/{id}` | Clear conversation session |
+| `GET` | `/documents/` | List all documents for the device |
+| `POST` | `/documents/upload` | Upload a file — streams SSE progress events |
+| `DELETE` | `/documents/{id}` | Delete document and all its embeddings |
+| `POST` | `/query/stream` | Ask a question — streams citations then tokens |
+| `POST` | `/query/compare/stream` | Compare a question across 2–10 specific docs |
+| `DELETE` | `/query/session/{id}` | Clear conversation history for a session |
+
+All endpoints require the `X-Device-ID` header for per-user data isolation.
 
 ## Evaluation
 
-Add Q&A pairs to `eval/eval_dataset.json` (after uploading your documents), then:
+Add Q&A pairs to `eval/eval_dataset.json` after uploading your documents, then:
 
 ```bash
 cd eval
 python eval.py --api http://localhost:8000 --k 5
 ```
 
-Reports `hit@k` (was the expected document in the top-k citations?) and `keyword@k` (did expected keywords appear in retrieved chunks?).
-
-## Project Structure
-
-```
-multi-doc-rag/
-  backend/
-    main.py                  # FastAPI app, CORS config
-    Procfile                 # For Railway/Heroku deployment
-    railway.toml             # Railway-specific deployment config
-    routers/
-      documents.py           # Upload (SSE progress), list, delete
-      query.py               # Query stream, compare stream, session clear
-    services/
-      parser.py              # Format-aware document parsing
-      chunker.py             # Semantic chunking via sentence similarity
-      embedder.py            # Local sentence-transformers embedding
-      retriever.py           # Hybrid retrieval (BM25 + vector, RRF) + multi-query
-      generator.py           # Groq streaming generation, query variant expansion
-      pipeline.py            # Orchestrates parse → chunk → embed → store
-    models/
-      schemas.py             # Pydantic models
-    db/
-      chroma_client.py       # ChromaDB CRUD operations
-  frontend/
-    app/
-      page.tsx               # Main layout, state, responsive sidebar
-      layout.tsx             # Root layout + metadata
-    components/
-      ChatPanel.tsx          # Message stream, compare mode UI
-      DocumentList.tsx       # Doc list with compare-mode checkboxes
-      UploadZone.tsx         # Drag-and-drop with SSE progress
-      SourceCitations.tsx    # Expandable citation cards
-    lib/
-      api.ts                 # Typed fetch wrappers + SSE parsers
-      types.ts               # Shared TypeScript interfaces
-  eval/
-    eval.py                  # Retrieval evaluation script (hit@k, keyword@k)
-    eval_dataset.json        # Q&A pairs for evaluation
-```
+Reports `hit@k` (was the expected document in the top-k citations?) and `keyword@k` (did expected keywords appear in the retrieved chunks?).
 
 ## Key Design Decisions
 
-**Hybrid retrieval (BM25 + vector)** — Vector search excels at semantic similarity but misses exact keyword matches. BM25 is the opposite. RRF merges both ranked lists without needing to tune score scales — a chunk scoring well in either list gets boosted.
+**Hybrid retrieval (BM25 + vector, RRF)** — Vector search captures semantic similarity but misses exact-match keywords. BM25 is the opposite. Rather than tuning score scales between them, Reciprocal Rank Fusion combines the ranked lists directly: a chunk that ranks highly in either method gets a boosted fused score. RRF_K=60 follows the standard from Cormack et al.
 
-**Multi-query expansion** — A single question phrasing often misses relevant chunks that would surface under a different wording. Generating 2 variants via Groq, retrieving independently, then deduplicating by highest score gives broader coverage with minimal added latency.
+**Multi-query expansion** — A single phrasing often misses relevant chunks that surface under a different wording. The query is sent to Groq to generate 2 alternative phrasings; retrieval runs for all 3 in parallel. Results are deduplicated by chunk, keeping the highest score per chunk. Adds one LLM round-trip (~100ms) in exchange for meaningfully broader recall.
 
-**Semantic chunking over fixed-size** — Sentences are embedded and compared pairwise. Splits happen where cosine similarity drops below a threshold (0.4), keeping topically coherent chunks together. This improves retrieval relevance at the cost of slightly more compute during ingestion.
+**Semantic chunking over fixed-size** — Each sentence is embedded and consecutive similarity is tracked. Splits happen where similarity drops below 0.65, keeping topically coherent text together in one chunk (100–800 char bounds). Each chunk carries one sentence of overlap with the next to preserve cross-boundary context. This improves retrieval precision compared to naive character-based splitting.
 
-**Local embeddings** — `all-MiniLM-L6-v2` runs entirely on CPU, producing 384-dimensional vectors. No embedding API calls means no per-token cost and no latency on ingestion.
+**Local embeddings** — `all-MiniLM-L6-v2` runs on CPU, producing 384-dim vectors in ~10ms per chunk. No embedding API means zero per-ingestion cost and no external dependency for the most latency-sensitive pipeline step.
 
-**Groq for LLM** — Fast inference (often 200+ tokens/sec), free API tier, and `llama-3.3-70b-versatile` follows citation instructions reliably.
+**Per-device isolation** — Every chunk is stored with a `device_id` metadata field derived from the `X-Device-ID` request header. All queries and deletes are scoped to that ID, giving each browser session its own private document library without authentication overhead.
 
-**SSE over WebSockets** — SSE is unidirectional (server → client) which matches both use cases (ingestion progress, token streaming). Simpler to implement and debug than WebSockets for this pattern.
+**SSE over WebSockets** — Both use cases (ingestion progress events, token streaming) are server-to-client only. SSE is a better fit: simpler to implement, works through proxies without upgrade headers, and requires no client-side state machine.
