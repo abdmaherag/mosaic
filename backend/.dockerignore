@@ -1,0 +1,8 @@
+.env
+.env.*
+chroma_data/
+venv/
+__pycache__/
+*.pyc
+.tmp/
+tests/

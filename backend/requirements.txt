@@ -1,0 +1,14 @@
+fastapi==0.115.6
+uvicorn==0.34.0
+python-multipart==0.0.19
+sse-starlette==2.2.1
+chromadb==0.6.3
+sentence-transformers==3.4.1
+groq==0.15.0
+PyPDF2==3.0.1
+python-docx==1.1.2
+beautifulsoup4==4.12.3
+nltk==3.9.1
+python-dotenv==1.0.1
+pydantic==2.10.4
+rank-bm25==0.2.2
