@@ -31,6 +31,7 @@ chroma_data/
 
 # Project artifacts
 *.png
+!frontend/public/og-image.png
 MEMORY.md
 CLAUDE.md
 PRD.md
