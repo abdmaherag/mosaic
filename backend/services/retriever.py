@@ -36,6 +36,46 @@ def _get_bm25(device_id: str = "") -> tuple[BM25Okapi | None, list[dict], dict[s
     return index, corpus, corpus_by_id
 
 
+def _dedup_near_duplicates(
+    ranked_ids: list[str],
+    chunk_map: dict[str, dict],
+    jaccard_threshold: float = 0.7,
+) -> list[str]:
+    """Drop near-duplicate chunks from a ranked list, keeping the higher-ranked
+    one. Uses token-set Jaccard — cheap, parser-noise-resilient, and good
+    enough to catch the common "same page extracted twice" / "overlapping
+    chunks share most sentences" failure modes.
+
+    jaccard_threshold=0.7: chunks sharing 70%+ of their tokens are duplicates.
+    Lower would over-collapse legitimately related chunks; higher misses the
+    parser-induced near-dupes we actually see.
+    """
+    kept: list[str] = []
+    kept_token_sets: list[set[str]] = []
+    for cid in ranked_ids:
+        text = chunk_map.get(cid, {}).get("text", "")
+        # Token set on lowercased words >=4 chars — short tokens (math symbols,
+        # stopwords) inflate Jaccard between unrelated chunks.
+        tokens = {w for w in text.lower().split() if len(w) >= 4}
+        if not tokens:
+            kept.append(cid)
+            kept_token_sets.append(tokens)
+            continue
+        is_dupe = False
+        for prev in kept_token_sets:
+            if not prev:
+                continue
+            overlap = len(tokens & prev)
+            union = len(tokens | prev)
+            if union and overlap / union >= jaccard_threshold:
+                is_dupe = True
+                break
+        if not is_dupe:
+            kept.append(cid)
+            kept_token_sets.append(tokens)
+    return kept
+
+
 def _reciprocal_rank_fusion(
     *ranked_lists: list[tuple[str, float]],
 ) -> dict[str, float]:
@@ -74,15 +114,24 @@ def retrieve(
     metas = results["metadatas"][0]
     dists = results["distances"][0]
 
-    # Map chunk_id -> data for later lookup
+    # chunk_map tracks text/meta and the signals that pulled the chunk in:
+    #   distance  — cosine distance from vector search (None if BM25-only)
+    #   bm25      — raw BM25 score (None if vector-only)
+    # Filtering happens per-source: a vector chunk is kept if its distance
+    # clears CHUNK_RELEVANCE_THRESHOLD; a BM25 chunk is kept if its raw score
+    # is positive (at least one query term hit). Both lists then feed RRF.
     chunk_map: dict[str, dict] = {}
     vector_scored: list[tuple[str, float]] = []
+    best_vector_distance = 1.0
     for doc_text, meta, dist in zip(docs, metas, dists):
         cid = f"{meta['doc_id']}_chunk_{meta['chunk_index']}"
-        chunk_map[cid] = {"text": doc_text, "meta": meta, "distance": dist}
-        vector_scored.append((cid, 1 - dist))  # similarity = 1 - distance
+        chunk_map[cid] = {"text": doc_text, "meta": meta, "distance": dist, "bm25": None}
+        best_vector_distance = min(best_vector_distance, dist)
+        if dist <= CHUNK_RELEVANCE_THRESHOLD:
+            vector_scored.append((cid, 1 - dist))
 
     bm25_scored: list[tuple[str, float]] = []
+    best_bm25_score = 0.0
     if not doc_ids:
         bm25_index, bm25_corpus, corpus_by_id = _get_bm25(device_id)
         if bm25_index and bm25_corpus:
@@ -94,41 +143,66 @@ def retrieve(
                 reverse=True,
             )[:fetch_n]
             for cid, score in ranked:
+                if score <= 0:
+                    continue  # no query term matched — don't pollute the fusion
                 match = corpus_by_id.get(cid)
                 if metadata_filter and match:
                     if not all(match["meta"].get(k) == v for k, v in metadata_filter.items()):
                         continue
                 bm25_scored.append((cid, score))
-                if cid not in chunk_map and match:
-                    chunk_map[cid] = {"text": match["text"], "meta": match["meta"], "distance": 1.0}
+                best_bm25_score = max(best_bm25_score, score)
+                if cid in chunk_map:
+                    chunk_map[cid]["bm25"] = score
+                elif match:
+                    chunk_map[cid] = {
+                        "text": match["text"], "meta": match["meta"],
+                        "distance": None, "bm25": score,
+                    }
 
-    # Combine scores via Reciprocal Rank Fusion
+    # Nothing survived either filter → no-answer
+    if not vector_scored and not bm25_scored:
+        return [], False
+
     if bm25_scored:
         hybrid_scores = _reciprocal_rank_fusion(vector_scored, bm25_scored)
     else:
         hybrid_scores = _reciprocal_rank_fusion(vector_scored)
 
-    top_ids = sorted(hybrid_scores, key=lambda x: hybrid_scores[x], reverse=True)[:n_results]
+    ranked_ids = sorted(hybrid_scores, key=lambda x: hybrid_scores[x], reverse=True)
+    # Dedup near-duplicates before slicing top-k — otherwise a page extracted
+    # twice (or two heavily-overlapped chunks) consume slots that should go
+    # to genuinely different evidence.
+    deduped = _dedup_near_duplicates(ranked_ids, chunk_map)
+    top_ids = deduped[:n_results]
 
     citations: list[SourceCitation] = []
-    best_distance = 1.0
     for cid in top_ids:
         data = chunk_map.get(cid)
         if not data:
             continue
+        # Display score: cosine similarity (1 - distance) for chunks that
+        # came from vector search — gives an intuitive [0, 1] range. For
+        # BM25-only chunks (no cosine distance available), fall back to
+        # max-normalized BM25 so the user-visible scale is comparable.
+        # Note: top_ids ordering is RRF-based, not score-based, so this
+        # display change does not affect retrieval ranking.
         dist = data["distance"]
-        if dist > CHUNK_RELEVANCE_THRESHOLD:
-            continue
-        best_distance = min(best_distance, dist)
+        if dist is not None:
+            display_score = max(0.0, min(1.0, 1 - dist))
+        else:
+            bm25 = data.get("bm25") or 0.0
+            display_score = bm25 / best_bm25_score if best_bm25_score > 0 else 0.0
         citations.append(SourceCitation(
             document=data["meta"]["filename"],
             chunk_text=data["text"],
-            score=round(hybrid_scores.get(cid, 1 - dist), 4),
+            score=round(display_score, 4),
             page=data["meta"].get("page"),
             section=data["meta"].get("section"),
         ))
 
-    has_relevant = best_distance < NO_ANSWER_THRESHOLD
+    # has_relevant: either vector search found a semantically close chunk OR
+    # BM25 found strong lexical overlap. Either signal is enough to answer.
+    has_relevant = (best_vector_distance < NO_ANSWER_THRESHOLD) or (best_bm25_score > 0)
     return citations, has_relevant
 
 
@@ -176,7 +250,12 @@ async def retrieve_multi_query(
 ) -> tuple[list[SourceCitation], bool]:
     from services.generator import generate_query_variants
 
-    variants = await generate_query_variants(question)
+    # If query-variant generation fails (rate limit, API error), fall back to
+    # the original question alone. Retrieval still works without paraphrases.
+    try:
+        variants = await generate_query_variants(question)
+    except Exception:
+        variants = []
     queries = [question] + variants
 
     loop = asyncio.get_event_loop()

@@ -18,47 +18,24 @@ Formatting (STRICT — follow exactly):
 
 NEVER put source citations inline within sentences. Each bullet point must be on its own line."""
 
-SYSTEM_PROMPT = """You are a helpful assistant that answers questions based on provided document excerpts.
+SYSTEM_PROMPT = """[System Role]
+You are a helpful and expert research assistant. Your task is to provide accurate, concise answers based *only* on the provided context.
 
-Rules:
-- Only use information from the provided context to answer
-- If the context doesn't contain enough information, say so clearly
-- Be concise and direct
+[Context]
+<context>
+{retrieved_documents}
+</context>
 
-CRITICAL FORMATTING RULES — you MUST follow these exactly:
+[User Query]
+{user_query}
 
-1. Your response MUST contain multiple lines separated by blank lines. NEVER output a single paragraph.
-2. Start with a one-line summary sentence, followed by a blank line.
-3. Use **bold text** as section headings (NOT ## markdown headings). Each heading gets its own line with blank lines around it.
-4. Use markdown bullet points, each on its own line:
-   * First item
-   * Second item
-5. NEVER put multiple facts on the same line separated by asterisks.
-6. Source citations go on their own line at the very end: Source: filename.pdf
-7. NEVER write [Source: filename] inline within text.
+[Instructions & Constraints]
+1. Read the <context> carefully.
+2. If the answer is not in the context, state that you do not know. Do not make up information.
+3. Cite the source of information using [1] or [2] based on the context provided.
+4. Keep the answer professional and concise.
 
-You MUST format your response EXACTLY like this example (notice the line breaks):
-
-John Smith is a software engineer based in **New York**.
-
-**Contact Information**
-
-* Phone: (+1) 555-0100
-* Email: john.smith@example.com
-
-**Education**
-
-* **Bachelor of Science in Computer Science**
-  Example University
-  Duration: 09/2018 – 06/2022
-
-**Key Skills**
-
-* Machine Learning
-* Data Analysis
-* Cloud Architecture
-
-Source: resume.pdf"""
+[Final Output]"""
 
 NO_ANSWER_PROMPT = """The retrieved document chunks don't appear to be relevant to the user's question.
 Tell the user honestly that you couldn't find relevant information in their documents.
@@ -92,24 +69,22 @@ def _build_messages(
     has_relevant: bool,
     chat_history: list[dict] | None = None,
 ) -> list[dict]:
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-
-    if chat_history:
-        messages.extend(chat_history[-10:])  # Last 5 turns (10 messages)
-
     if has_relevant:
         context = _build_context(citations)
-        user_msg = (
-            f"Context from documents:\n\n{context}\n\n"
-            f"Question: {question}\n\n"
-            f"IMPORTANT: Format your answer with **bold headings**, bullet points on separate lines, "
-            f"and blank lines between sections. Do NOT write a single paragraph."
-        )
     else:
         context = _build_context(citations)
-        user_msg = f"{NO_ANSWER_PROMPT}\n\nClosest excerpts found (low relevance):\n\n{context}\n\nUser's question: {question}"
+        question = f"{NO_ANSWER_PROMPT}\n\nUser's question: {question}"
 
-    messages.append({"role": "user", "content": user_msg})
+    system_content = SYSTEM_PROMPT.format(
+        retrieved_documents=context,
+        user_query=question,
+    )
+    messages = [{"role": "system", "content": system_content}]
+
+    if chat_history:
+        messages.extend(chat_history[-10:])
+
+    messages.append({"role": "user", "content": question})
     return messages
 
 

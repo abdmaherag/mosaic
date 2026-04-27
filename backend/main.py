@@ -26,6 +26,11 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Pre-warm the embedding model so the first retrieval doesn't race on
+    # initialization (concurrent multi-query threads can break torch's
+    # meta-tensor handling if they hit lazy-load simultaneously).
+    from services.embedder import _get_model
+    _get_model()
     yield
 
 

@@ -132,6 +132,11 @@ html.dark ::-webkit-scrollbar-thumb:hover { background: #4a4a58; }
 .animate-fade-in { animation: fadeIn 0.4s ease-out; }
 .scrollbar-thin::-webkit-scrollbar { width: 6px; }
 .scrollbar-thin::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+.scrollbar-thin { -webkit-overflow-scrolling: touch; }
+/* Prevent input zoom on iOS Safari (font-size <16px triggers it) */
+@media (max-width: 767px) {
+  textarea, input { font-size: 16px; }
+}
 .collapse-content { transition: max-height 0.3s ease-out, opacity 0.2s ease-out; overflow: hidden; }
 .collapse-content.collapsed { max-height: 0; opacity: 0; }
 .collapse-content.expanded { max-height: 2000px; opacity: 1; }

@@ -40,3 +40,11 @@ PRD.md
 
 # Claude Code
 .claude/
+
+# Local dev server logs
+*.log
+backend/uvicorn*.log
+frontend/next*.log
+
+# Playwright MCP scratch
+.playwright-mcp/
