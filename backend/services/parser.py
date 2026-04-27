@@ -1,18 +1,24 @@
 import io
 from pathlib import Path
 
+import fitz  # PyMuPDF — better at math/ligatures/column layout than PyPDF2
 from bs4 import BeautifulSoup
 from docx import Document as DocxDocument
-from PyPDF2 import PdfReader
 
 
 def parse_pdf(content: bytes) -> str:
-    reader = PdfReader(io.BytesIO(content))
+    """Extract text from a PDF using PyMuPDF.
+
+    PyMuPDF handles ligatures (fi, fl), math notation, and multi-column
+    layout substantially better than PyPDF2. The "text" extraction mode
+    preserves reading order while collapsing the worst spacing artifacts.
+    """
     pages = []
-    for i, page in enumerate(reader.pages):
-        text = page.extract_text() or ""
-        if text.strip():
-            pages.append(f"[Page {i + 1}]\n{text}")
+    with fitz.open(stream=content, filetype="pdf") as doc:
+        for i, page in enumerate(doc):
+            text = page.get_text("text") or ""
+            if text.strip():
+                pages.append(f"[Page {i + 1}]\n{text}")
     return "\n\n".join(pages)
 
 

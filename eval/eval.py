@@ -21,11 +21,18 @@ import sys
 import urllib.request
 
 
+DEVICE_ID = "eval-device-0001"
+
+
 def query_api(api_base: str, question: str, endpoint: str = "/query/") -> list[dict]:
     """Call a query endpoint and return citations."""
     url = f"{api_base}{endpoint}"
     data = json.dumps({"question": question}).encode()
-    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={"Content-Type": "application/json", "X-Device-ID": DEVICE_ID},
+    )
     with urllib.request.urlopen(req, timeout=60) as resp:
         body = json.loads(resp.read())
     return body.get("citations", [])

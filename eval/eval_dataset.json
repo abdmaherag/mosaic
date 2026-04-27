@@ -1,30 +1,55 @@
 {
-  "description": "Evaluation dataset for retrieval quality. Upload the corresponding documents to the backend before running eval.py. Each pair tests whether retrieval pulls from the correct document and surfaces relevant content.",
+  "description": "Evaluation dataset against 'Introduction to Machine Learning' (Smola & Vishwanathan, Cambridge 2008). Upload machinelearning.pdf before running eval.py. Each question has strong keyword anchors that appear many times in the book, so top-k retrieval should surface relevant chunks.",
   "pairs": [
     {
-      "question": "What is the candidate's email address?",
-      "expected_document": "CV.pdf",
-      "expected_keywords": ["email", "@"]
+      "question": "What is gradient descent?",
+      "expected_document": "machinelearning.pdf",
+      "expected_keywords": ["gradient", "descent"]
     },
     {
-      "question": "What university did the candidate attend?",
-      "expected_document": "CV.pdf",
-      "expected_keywords": ["university", "bachelor"]
+      "question": "What is a kernel function in machine learning?",
+      "expected_document": "machinelearning.pdf",
+      "expected_keywords": ["kernel"]
     },
     {
-      "question": "What programming languages does the candidate know?",
-      "expected_document": "CV.pdf",
-      "expected_keywords": ["python", "javascript", "programming"]
+      "question": "What is a support vector machine?",
+      "expected_document": "machinelearning.pdf",
+      "expected_keywords": ["support vector", "hyperplane", "margin", "svm"]
     },
     {
-      "question": "What is the candidate's phone number?",
-      "expected_document": "CV.pdf",
-      "expected_keywords": ["phone", "962"]
+      "question": "What is convex optimization?",
+      "expected_document": "machinelearning.pdf",
+      "expected_keywords": ["convex", "optimization"]
     },
     {
-      "question": "What work experience does the candidate have?",
-      "expected_document": "CV.pdf",
-      "expected_keywords": ["experience", "work", "role"]
+      "question": "What is the bias-variance trade-off?",
+      "expected_document": "machinelearning.pdf",
+      "expected_keywords": ["bias", "variance"]
+    },
+    {
+      "question": "What is maximum likelihood estimation?",
+      "expected_document": "machinelearning.pdf",
+      "expected_keywords": ["maximum likelihood"]
+    },
+    {
+      "question": "What is a Naive Bayes classifier?",
+      "expected_document": "machinelearning.pdf",
+      "expected_keywords": ["naive bayes", "bayes"]
+    },
+    {
+      "question": "What is a loss function?",
+      "expected_document": "machinelearning.pdf",
+      "expected_keywords": ["loss"]
+    },
+    {
+      "question": "What is linear regression?",
+      "expected_document": "machinelearning.pdf",
+      "expected_keywords": ["regression", "linear"]
+    },
+    {
+      "question": "What is a perceptron?",
+      "expected_document": "machinelearning.pdf",
+      "expected_keywords": ["perceptron"]
     }
   ]
 }

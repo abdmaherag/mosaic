@@ -3,11 +3,29 @@ import uuid
 from collections import OrderedDict
 
 from fastapi import APIRouter, Depends, Header, HTTPException
+from groq import APIConnectionError, APIStatusError, RateLimitError
 from sse_starlette.sse import EventSourceResponse
 
 from models.schemas import CompareRequest, QueryRequest, QueryResponse
 from services.retriever import deduplicate_sources, retrieve, retrieve_multi_query
 from services.generator import generate, generate_compare_stream, generate_stream
+
+
+def _friendly_groq_error(exc: Exception) -> str:
+    """Translate Groq SDK exceptions to user-readable messages."""
+    if isinstance(exc, RateLimitError):
+        # Groq rate-limit messages include a "try again in Xm Ys" hint we
+        # surface verbatim — most useful piece of info for the user.
+        body = getattr(exc, "body", None) or {}
+        msg = (body.get("error") or {}).get("message", "")
+        if "try again" in msg.lower():
+            return f"Rate limit reached. {msg.split('Please ')[-1].rstrip('.')}."
+        return "Rate limit reached on the LLM provider — please try again shortly."
+    if isinstance(exc, APIConnectionError):
+        return "Could not reach the LLM provider. Check your connection and try again."
+    if isinstance(exc, APIStatusError):
+        return f"LLM provider returned an error ({exc.status_code}). Please try again."
+    return f"Generation failed: {type(exc).__name__}"
 
 router = APIRouter(prefix="/query", tags=["query"])
 
@@ -103,9 +121,22 @@ async def query_documents_stream(req: QueryRequest, x_device_id: str = Depends(_
         }
 
         full_answer = ""
-        async for token in generate_stream(req.question, citations, has_relevant, chat_history):
-            full_answer += token
-            yield {"event": "token", "data": token}
+        try:
+            async for token in generate_stream(req.question, citations, has_relevant, chat_history):
+                full_answer += token
+                yield {"event": "token", "data": token}
+        except (RateLimitError, APIConnectionError, APIStatusError) as exc:
+            # Surface a user-readable error as a token chunk + stream end,
+            # so the frontend renders it inline instead of a cryptic
+            # "Error in input stream" from a broken SSE connection.
+            err_msg = _friendly_groq_error(exc)
+            if not full_answer:
+                yield {"event": "token", "data": err_msg}
+                full_answer = err_msg
+            else:
+                yield {"event": "token", "data": f"\n\n[{err_msg}]"}
+            yield {"event": "done", "data": json.dumps({"session_id": session_id, "error": err_msg})}
+            return
 
         chat_history.append({"role": "user", "content": req.question})
         chat_history.append({"role": "assistant", "content": full_answer})
