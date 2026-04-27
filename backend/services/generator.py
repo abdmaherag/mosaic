@@ -18,8 +18,7 @@ Formatting (STRICT — follow exactly):
 
 NEVER put source citations inline within sentences. Each bullet point must be on its own line."""
 
-SYSTEM_PROMPT = """[System Role]
-You are a helpful and expert research assistant. Your task is to provide accurate, concise answers based *only* on the provided context.
+SYSTEM_PROMPT = """You are an expert research assistant. Answer the user's question grounded in the provided context.
 
 [Context]
 <context>
@@ -29,13 +28,13 @@ You are a helpful and expert research assistant. Your task is to provide accurat
 [User Query]
 {user_query}
 
-[Instructions & Constraints]
-1. Read the <context> carefully.
-2. If the answer is not in the context, state that you do not know. Do not make up information.
-3. Cite the source of information using [1] or [2] based on the context provided.
-4. Keep the answer professional and concise.
-
-[Final Output]"""
+[How to answer]
+- Ground your answer in the context. You may paraphrase and synthesize across passages — do not copy text verbatim unless quoting.
+- If the context only partially covers the question, answer the parts it covers and say what's missing. Don't refuse the whole question.
+- Cite sources inline as [1], [2] using the order the context blocks appear above. Cite once per claim, not after every word.
+- Use markdown structure when it helps: a brief opening sentence, then bullet points or short paragraphs. No mandatory headings.
+- Be direct and professional. No filler ("Based on the context..."), no apology preambles.
+- Only refuse if the context truly contains nothing relevant — in that case say "The provided documents don't cover this." in one line."""
 
 NO_ANSWER_PROMPT = """The retrieved document chunks don't appear to be relevant to the user's question.
 Tell the user honestly that you couldn't find relevant information in their documents.

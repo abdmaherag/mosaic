@@ -852,7 +852,7 @@ function ExchangeCard({
                       {s.pages.length > 0 && (
                         <span className="text-rag-gray-400">pp. {s.pages.join(", ")}</span>
                       )}
-                      <span className="ml-auto text-rag-gray-400 flex-shrink-0">score {s.score.toFixed(3)}</span>
+                      <span className="ml-auto text-rag-gray-400 flex-shrink-0">score {s.score.toFixed(4)}</span>
                     </summary>
                     <div className="mt-2 pl-3 border-l-2 border-rag-blue-100 space-y-2">
                       {s.chunks.map((c, j) => (
