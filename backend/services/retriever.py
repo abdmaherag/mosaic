@@ -1,13 +1,28 @@
 import asyncio
+import math
 
 from rank_bm25 import BM25Okapi
 
-from db.chroma_client import query_chunks, get_all_chunks
+from db.chroma_client import query_chunks, get_all_chunks, get_embeddings_by_ids
 from models.schemas import DocumentSource, SourceChunk, SourceCitation
 from services.embedder import embed_query
 
 NO_ANSWER_THRESHOLD = 0.85  # ChromaDB cosine distance: lower = more similar
 CHUNK_RELEVANCE_THRESHOLD = 0.80  # Per-chunk filter: drop chunks with distance above this
+# Final display floor: only show citations whose true cosine similarity to the
+# query is at least this. Prevents weak BM25-only matches from being shown
+# with inflated scores. 0.35 is empirically the floor below which chunks are
+# rarely actually relevant on this corpus.
+DISPLAY_SIMILARITY_FLOOR = 0.35
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    if na == 0 or nb == 0:
+        return 0.0
+    return dot / (na * nb)
 
 # Reciprocal Rank Fusion constant (standard default from Cormack et al.)
 RRF_K = 60
@@ -175,27 +190,39 @@ def retrieve(
     deduped = _dedup_near_duplicates(ranked_ids, chunk_map)
     top_ids = deduped[:n_results]
 
+    # Compute REAL cosine similarity for every displayed chunk against the
+    # query embedding — fixes the "score=1.00 always" bug caused by
+    # max-normalizing BM25 against itself. For vector-search hits we already
+    # have a distance; for BM25-only hits we pull the stored embedding from
+    # Chroma and compute cosine on the spot.
+    bm25_only_ids = [
+        cid for cid in top_ids
+        if chunk_map.get(cid, {}).get("distance") is None
+    ]
+    fetched_embeddings = get_embeddings_by_ids(bm25_only_ids) if bm25_only_ids else {}
+
     citations: list[SourceCitation] = []
     for cid in top_ids:
         data = chunk_map.get(cid)
         if not data:
             continue
-        # Display score: cosine similarity (1 - distance) for chunks that
-        # came from vector search — gives an intuitive [0, 1] range. For
-        # BM25-only chunks (no cosine distance available), fall back to
-        # max-normalized BM25 so the user-visible scale is comparable.
-        # Note: top_ids ordering is RRF-based, not score-based, so this
-        # display change does not affect retrieval ranking.
         dist = data["distance"]
         if dist is not None:
-            display_score = max(0.0, min(1.0, 1 - dist))
+            similarity = max(0.0, min(1.0, 1 - dist))
         else:
-            bm25 = data.get("bm25") or 0.0
-            display_score = bm25 / best_bm25_score if best_bm25_score > 0 else 0.0
+            emb = fetched_embeddings.get(cid)
+            similarity = max(0.0, _cosine(query_embedding, emb)) if emb else 0.0
+
+        # Adaptive cutoff: drop weak matches from the visible set even if
+        # that means returning fewer than n_results citations. Better to
+        # show 1 strong source than pad the list with noise.
+        if similarity < DISPLAY_SIMILARITY_FLOOR:
+            continue
+
         citations.append(SourceCitation(
             document=data["meta"]["filename"],
             chunk_text=data["text"],
-            score=round(display_score, 4),
+            score=round(similarity, 4),
             page=data["meta"].get("page"),
             section=data["meta"].get("section"),
         ))

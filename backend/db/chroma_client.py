@@ -100,6 +100,20 @@ def reset_collection() -> None:
     get_collection()
 
 
+def get_embeddings_by_ids(ids: list[str]) -> dict[str, list[float]]:
+    """Fetch stored embeddings for a list of chunk ids. Used to score
+    BM25-only chunks against the query without re-embedding them."""
+    if not ids:
+        return {}
+    collection = get_collection()
+    result = collection.get(ids=ids, include=["embeddings"])
+    out: dict[str, list[float]] = {}
+    for cid, emb in zip(result["ids"], result["embeddings"]):
+        if emb is not None:
+            out[cid] = list(emb)
+    return out
+
+
 def get_all_chunks(device_id: str = "") -> list[dict]:
     """Return chunks for BM25 index construction, filtered by device."""
     collection = get_collection()
